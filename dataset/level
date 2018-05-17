@@ -1,0 +1,14 @@
+['cn_cyan_cashmere',
+ 'native_wool',
+ 'normal_wool',
+ 'mongo_cyan_cashmere',
+ 'cn_white_cashmere',
+ 'mongo_purple_cashmere']
+
+cn_cyan_cashmere,0
+native_wool,1
+normal_wool,2
+mongo_cyan_cashmere,3
+cn_white_cashmere,4
+mongo_purple_cashmere,5
+
