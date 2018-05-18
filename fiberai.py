@@ -6,8 +6,13 @@ import pandas as pd
 from torchvision import transforms, models
 from torch import nn, optim
 from torch.autograd import Variable
+import time
+import copy
+from torch.optim import lr_scheduler
+import ipdb
 import seaborn as sns
 import matplotlib.pyplot as plt
+import numpy as np
 from tensorboardX import SummaryWriter
 
 
@@ -15,15 +20,12 @@ def default_loader(path):
     return Image.open(path).convert('RGB')
 
 
-class myImageFloder(Dataset):
-    def __init__(self, csv_file, root, transform=None,
-                 target_transform=None,
-                 loader=default_loader):
+class MyImageFolder(Dataset):
+    def __init__(self, csv_file, root, transform=None, loader=default_loader):
         self.files = pd.read_csv(csv_file, names=['images', 'labels'])
         # file = file.sample(frac=1).reset_index(drop=True)
         self.root = root
         self.transform = transform
-        self.target_transform = target_transform
         self.loader = loader
 
     def __getitem__(self, index):
@@ -38,117 +40,179 @@ class myImageFloder(Dataset):
         return len(self.files)
 
 
-batch_size = 32
-num_epochs = 50
-learning_rate = 1e-4
-root = '/home/gtwell/all_images/data'
-train_dir = '/home/gtwell/all_images/data/Annotations/train.csv'
-#test_dir = '/home/gtwell/FashionAI/neck/neck_design_labels_test.csv'
-train_transform = transforms.Compose([transforms.Resize((299, 299)),
-                                      transforms.RandomHorizontalFlip(),
-                                      transforms.RandomVerticalFlip(),
-                                      transforms.ColorJitter(0.4, 0.4),
-                                      transforms.RandomRotation(40),
-                                      transforms.ToTensor(),
-                                      transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5])])
-test_transform = transforms.Compose([transforms.Resize((299, 299)),
-                                     transforms.ToTensor(),
-                                     transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5])])
+# batch_size = 32
+# num_epochs = 50
+# learning_rate = 1e-4
+# root = '/home/gtwell/all_images/data'
+# train_dir = '/home/gtwell/all_images/data/Annotations/train.csv'
+# #test_dir = '/home/gtwell/FashionAI/neck/neck_design_labels_test.csv'
 
-train_dataset = myImageFloder(csv_file=train_dir, root=root, transform=train_transform)
-#test_dataset = myImageFloder(csv_file=test_dir, root=root, transform=test_transform)
-train_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=True, num_workers=2)
-#test_loader = DataLoader(dataset=test_dataset, batch_size=batch_size, shuffle=False, num_workers=3)
+def create_dataset(csv_file = './five_folders/fiber_a/{}.csv',
+                   root_dir = '/home/gtwell/all_images/dataset',
+                   phase = ['train', 'val'],
+                   shuffle=True,
+                   img_size=224,
+                   batch_size=32):
+    """Create dataset, dataloader for train and test
+    Args: label_type (str): Type of label
+        csv_file (str): CSV file pattern for file indices.
+        root_dir (str): Root dir based on paths in csv file.
+        phase: list of str 'train' or 'test'.
+    Returns:
+        out (dict): A dict contains image_datasets, dataloaders,
+            dataset_sizes
+    """
+
+    data_transforms = {
+        'train': transforms.Compose([
+            transforms.Resize((img_size, img_size)),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+        ]),
+        'val': transforms.Compose([
+            transforms.Resize((img_size, img_size)),
+            transforms.ToTensor(),
+            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+        ]),
+    }
+
+    image_datasets = {}
+    dataloaders = {}
+    dataset_sizes = {}
+    for x in phase:    # ['train', 'val']
+        image_datasets[x] = MyImageFolder(csv_file.format(x),
+                                          root_dir,
+                                          data_transforms[x])
+        if x == 'train':
+            dataloaders[x] = DataLoader(image_datasets[x],
+                                        batch_size=batch_size,
+                                        shuffle=shuffle and x=='train',
+                                        num_workers=3)
+        else:
+            dataloaders[x] = DataLoader(image_datasets[x],
+                                        batch_size=8,
+                                        shuffle=shuffle and x == 'train',
+                                        num_workers=3)
+        dataset_sizes[x] = len(image_datasets[x])
+
+    out = {'image_datasets': image_datasets,
+           'dataloaders': dataloaders,
+           'dataset_sizes': dataset_sizes}
+    return out
 
 
-# for index, (image, label) in enumerate(test_loader):
+csv_file = './five_folders/' + 'fiber_a/' + '{}.csv'
+root_dir = '/home/gtwell/all_images/dataset'
+out = create_dataset(csv_file=csv_file, root_dir=root_dir,)
+dataloaders = out['dataloaders']
+dataset_sizes = out['dataset_sizes']
+
+# for index, (image, label) in enumerate(out['image_datasets']['train']):
 #     print(image, label)
 #     if index >=2:
 #         break
 
+# writer = SummaryWriter('/home/gtwell/all_images/loss/loss0/')
+# save_dir = '/home/gtwell/all_images/save_model/inception.pkl'
 
-def train(learning_rate, optimizer, num_epochs):
-    losses = []
-    accuracy = []
-    # global learning_rate
-    # global optimizer
+
+def train_model(model, criterion, optimizer, scheduler, num_epochs=25):
+    since = time.time()
+
+    best_model_wts = copy.deepcopy(model.state_dict())
+    best_acc = 0.0
+
     for epoch in range(num_epochs):
-        for i, (images, labels) in enumerate(train_loader):
-            images = Variable(images).cuda()
-            # labels1 = labels
-            labels = torch.squeeze(labels)
-            labels = Variable(labels).cuda()
+        print('Epoch {}/{}'.format(epoch, num_epochs - 1))
+        print('-' * 10)
 
-            # Forward + Backward + Optimize
-            optimizer.zero_grad()
-            outputs = resnet(images)
-            loss = criterion(outputs, labels)
-            _, predicted = torch.max(outputs.data, 1)
-            correct = torch.sum(predicted == labels.data)
-            # correct = (predicted.cpu() == labels1).sum()
-            acc = correct / images.size(0)
-            accuracy.append(acc)
-            loss.backward()
-            losses.append(loss.data[0])
-            optimizer.step()
+        # Each epoch has a training and validation phase
+        for phase in ['train', 'val']:
+            if phase == 'train':
+                scheduler.step()
+                model.train()  # Set model to training mode
+            else:
+                model.eval()   # Set model to evaluate mode
 
-            if (i + 1) % 50 == 0:
-                print('Epoch [%d/%d], Iter [%d/%d] Loss: %.4f'
-                      % (epoch + 1, num_epochs, i + 1, len(train_dataset) // batch_size, loss.data[0]))
-                print('Accuracy is: {:>7.3%}'.format(acc))
+            running_loss = 0.0
+            running_corrects = 0
 
-        # Decaying Learning Rate
-        if (epoch + 1) % 10 == 0:
-            learning_rate /= 3
-            optimizer = optim.Adam(resnet.parameters(), lr=learning_rate)
+            batch_num = 0
+            # Iterate over data.
+            for inputs, labels in dataloaders[phase]:
+                inputs = Variable(inputs.cuda())
+                labels = Variable(labels.cuda())
 
-    def plot():
-        sns.set_style("darkgrid")
+                # zero the parameter gradients
+                optimizer.zero_grad()
 
-        plt.figure()
-        plt.plot(losses, label='loss curves')
-        plt.xlabel('iteration')
-        plt.ylabel('loss')
-        plt.legend()
-        plt.savefig('resnet50_fashionai_loss1.png', dpi=350)
+                # forward
+                # track history if only in train
 
-        plt.figure()
-        plt.plot(accuracy, 'r', label='accuracy curves')
-        plt.xlabel('iteration')
-        plt.ylabel('accuracy')
-        plt.legend()
-        plt.savefig('resnet50_fashionai_acc1.png', dpi=350)
-        # plt.show()
+                outputs = model(inputs)
 
-    plot()
+                _, preds = torch.max(outputs.data, 1)
+
+                loss = criterion(outputs, labels)
+
+                # backward + optimize only if in training phase
+                if phase == 'train':
+                    loss.backward()
+                    optimizer.step()
+
+                    if batch_num % 100 == 0:
+                        print('batch: #{}, loss = {}'.format(batch_num, loss.data[0]))
+                    batch_num += 1
+
+                # statistics
+                running_loss += loss.data[0] * inputs.size(0)
+                # ipdb.set_trace()
+                running_corrects += torch.sum(preds == labels.data)
+
+            epoch_loss = running_loss / dataset_sizes[phase]
+            epoch_acc = running_corrects / dataset_sizes[phase]
+
+            print('{} Loss: {:.4f} Acc: {:.4f}'.format(
+                phase, epoch_loss, epoch_acc))
+
+            # deep copy the model
+            if phase == 'val' and epoch_acc > best_acc:
+                best_acc = epoch_acc
+                best_model_wts = copy.deepcopy(model.state_dict())
+
+        print()
+
+    time_elapsed = time.time() - since
+    print('Training complete in {:.0f}m {:.0f}s'.format(
+        time_elapsed // 60, time_elapsed % 60))
+    print('Best val Acc: {:4f}'.format(best_acc))
+
+    # load best model weights
+    torch.save(best_model_wts, 'resnet_18.pkl')
+    model.load_state_dict(best_model_wts)
+    return model
 
 
-writer = SummaryWriter('/home/gtwell/all_images/loss/loss0/')
-save_dir = '/home/gtwell/all_images/save_model/inception.pkl'
+model_ft = models.resnet18(pretrained=True)
+num_ftrs = model_ft.fc.in_features
+model_ft.fc = nn.Linear(num_ftrs, 6)
 
-def creat_model(is_train=True, loader_defeault_model=True):
-    if is_train:
-        if loader_defeault_model:
-            inception = models.inception_v3(pretrained=loader_defeault_model)
-            num_ftrs = inception.fc.in_features
-            inception.fc = nn.Linear(num_ftrs, 5)
-        else:
-            inception = models.inception_v3(pretrained=False)
-            num_ftrs = inception.fc.in_features
-            inception.fc = nn.Linear(num_ftrs, 5)
-            inception.load_state_dict(torch.load(save_dir))
-    else:
-        inception = models.inception_v3(pretrained=False)
-        num_ftrs = inception.fc.in_features
-        inception.fc = nn.Linear(num_ftrs, 5)
-        inception.load_state_dict(torch.load(save_dir))
-        inception.eval()
-    # model_ft = models.resnet18(pretrained=True)
-    nn.init.xavier_uniform(inception.fc.weight)
-    nn.init.constant(inception.fc.bias, 0)
-    inception.cuda()
+model_ft.cuda()
 
-    return inception
+criterion = nn.CrossEntropyLoss()
+
+# Observe that all parameters are being optimized
+optimizer_ft = optim.SGD(model_ft.parameters(), lr=0.001, momentum=0.9)
+
+# Decay LR by a factor of 0.1 every 7 epochs
+exp_lr_scheduler = lr_scheduler.StepLR(optimizer_ft, step_size=7, gamma=0.1)
+
+model_ft = train_model(model_ft, criterion, optimizer_ft, exp_lr_scheduler,
+                       num_epochs=25)
+
+
+
 
 
 def train_epoch(learning_rate, num_epochs, is_train=True, loader_defeault_model=True):
@@ -227,36 +291,5 @@ def train_epoch(learning_rate, num_epochs, is_train=True, loader_defeault_model=
     torch.save(inception.state_dict(), save_dir)
 
 
-# Test the Model
-def test(loader):
-    # inception = models.inception_v3(pretrained=False)
-    # # model_ft = models.resnet18(pretrained=True)
-    # num_ftrs = inception.fc.in_features
-    # inception.fc = nn.Linear(num_ftrs, 5)
-    # # nn.init.xavier_uniform(resnet.fc.weight)
-    # # nn.init.constant(resnet.fc.bias, 0)
-    # inception.load_state_dict(torch.load(model_dir))
-    # inception.cuda()
-    # inception.eval()  # Change model to 'eval' mode (BN uses moving mean/var).
 
-    inception = creat_model(is_train=False, loader_defeault_model=False)
-
-    correct = 0
-    total = 0
-    for images, labels in loader:
-        images = Variable(images).cuda()
-        labels = torch.squeeze(labels)
-        outputs = inception(images)
-        _, predicted = torch.max(outputs.data, 1)
-        total += labels.size(0)
-        correct += (predicted.cpu() == labels).sum()
-        # print('(predicted.cpu() == labels).sum()', (predicted.cpu() == labels).sum())
-    print('predicted number correctly is {}, and total number is {}'.format(correct, total))
-    print('Test Accuracy of the model on the {1} test images: {0:.3%}'
-          .format((correct / total), (len(test_dataset))))
-
-
-if __name__ == '__main__':
-    train_epoch(learning_rate=learning_rate, num_epochs=num_epochs, is_train=True, loader_defeault_model=True)
-    #test(loader=test_loader)
 
