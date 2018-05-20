@@ -91,8 +91,7 @@ def create_dataset(csv_file = './five_folders/fiber_a/{}.csv',
                                         num_workers=3)
         else:
             dataloaders[x] = DataLoader(image_datasets[x],
-                                        batch_size=8,
-                                        shuffle=shuffle and x == 'train',
+                                        batch_size=32,
                                         num_workers=3)
         dataset_sizes[x] = len(image_datasets[x])
 
@@ -104,7 +103,7 @@ def create_dataset(csv_file = './five_folders/fiber_a/{}.csv',
 
 csv_file = './five_folders/' + 'fiber_a/' + '{}.csv'
 root_dir = '/home/gtwell/all_images/dataset'
-out = create_dataset(csv_file=csv_file, root_dir=root_dir)
+out = create_dataset(csv_file=csv_file, root_dir=root_dir, batch_size=64)
 dataloaders = out['dataloaders']
 dataset_sizes = out['dataset_sizes']
 
@@ -113,17 +112,31 @@ dataset_sizes = out['dataset_sizes']
 #     if index >=2:
 #         break
 
-# writer = SummaryWriter('/home/gtwell/all_images/loss/loss0/')
+writer = SummaryWriter('/home/gtwell/all_images/pre_log/loss/resnet18_adm/')
 # save_dir = '/home/gtwell/all_images/save_model/inception.pkl'
 
 
-def train_model(model, criterion, optimizer, scheduler, num_epochs, saved_model_file):
+def train_model(model, criterion, optimizer, scheduler, num_epochs, saved_model_file, load_checkpoint=False):
     since = time.time()
 
     best_model_wts = copy.deepcopy(model.state_dict())
     best_acc = 0.0
+    train_iter = 0
+    val_iter = 0
+    start_epoch = 0
 
-    for epoch in range(num_epochs):
+    if load_checkpoint:
+        if os.path.isfile(saved_model_file):
+            print("=> loading checkpoint '{}'".format(saved_model_file))
+            checkpoint = torch.load(saved_model_file)
+            start_epoch = checkpoint['epoch']
+            train_iter = checkpoint['train_iter']
+            val_iter = checkpoint['val_iter']
+            model.load_state_dict(checkpoint['state_dict'])
+            print("=> loaded checkpoint from epoch {})"
+                  .format(checkpoint['epoch']))
+
+    for epoch in range(start_epoch, num_epochs):
         print('Epoch {}/{}'.format(epoch, num_epochs - 1))
         print('-' * 10)
 
@@ -165,6 +178,8 @@ def train_model(model, criterion, optimizer, scheduler, num_epochs, saved_model_
                         print('batch: #{}, loss = {}'.format(batch_num, loss.data[0]))
                     batch_num += 1
 
+
+
                 # statistics
                 running_loss += loss.data[0] * inputs.size(0)
                 # ipdb.set_trace()
@@ -172,6 +187,23 @@ def train_model(model, criterion, optimizer, scheduler, num_epochs, saved_model_
 
             epoch_loss = running_loss / dataset_sizes[phase]
             epoch_acc = running_corrects / dataset_sizes[phase]
+
+            if phase == 'train':
+                train_loss = epoch_loss
+                train_acc = epoch_acc
+                writer.add_scalar('data/train_loss', train_loss, train_iter)
+                writer.add_scalar('data/train_acc', train_acc, train_iter)
+                writer.add_scalars('data/scalar_group', {'train_loss': train_loss,
+                                                         'train_acc': train_acc,}, train_iter)
+                train_iter += 1
+            else:
+                val_loss = epoch_loss
+                val_acc = epoch_acc
+                writer.add_scalar('data/val_loss', val_loss, val_iter)
+                writer.add_scalar('data/val_acc', val_acc, val_iter)
+                writer.add_scalars('data/scalar_group', {'val_loss': val_loss,
+                                                         'val_acc': val_acc, }, val_iter)
+                val_iter += 1
 
             print('{} Loss: {:.4f} Acc: {:.4f}'.format(
                 phase, epoch_loss, epoch_acc))
@@ -181,6 +213,14 @@ def train_model(model, criterion, optimizer, scheduler, num_epochs, saved_model_
                 best_acc = epoch_acc
                 best_model_wts = copy.deepcopy(model.state_dict())
                 torch.save(best_model_wts, saved_model_file)
+
+                torch.save({
+                    'epoch': epoch + 1,
+                    'state_dict': best_model_wts,
+                    'train_iter': train_iter,
+                    'val_iter': val_iter,
+                }, saved_model_file)
+
 
         print()
 
@@ -203,92 +243,22 @@ model_ft.cuda()
 criterion = nn.CrossEntropyLoss()
 
 # Observe that all parameters are being optimized
-optimizer_ft = optim.SGD(model_ft.parameters(), lr=0.001, momentum=0.9)
-
+optimizer_ft = optim.Adam(model_ft.parameters(), lr=0.001)
+# optimizer_ft = optim.SGD(model_ft.parameters(), lr=0.001, momentum=0.9)
 # Decay LR by a factor of 0.1 every 7 epochs
 exp_lr_scheduler = lr_scheduler.StepLR(optimizer_ft, step_size=7, gamma=0.1)
 
+# model_ft = train_model(model_ft, criterion, optimizer_ft, exp_lr_scheduler,
+#                        num_epochs=25, saved_model_file='saved_model_file/resnet18_adm.pkl')
+
 model_ft = train_model(model_ft, criterion, optimizer_ft, exp_lr_scheduler,
-                       num_epochs=25, saved_model_file='saved_model_file/resnet.pkl')
+                       num_epochs=9, saved_model_file='pre_training/resnet18_checkpoint.tar', load_checkpoint=True)
+
+writer.close()
 
 
 
 
-
-def train_epoch(learning_rate, num_epochs, is_train=True, loader_defeault_model=True):
-    # inception = models.inception_v3(pretrained=False)
-    # # model_ft = models.resnet18(pretrained=True)
-    # num_ftrs = inception.fc.in_features
-    # inception.fc = nn.Linear(num_ftrs, 5)
-    # # nn.init.xavier_uniform(resnet.fc.weight)
-    # # nn.init.constant(resnet.fc.bias, 0)
-    # inception.load_state_dict(torch.load('/home/gtwell/FashionAI/neck/save_model/inception_0.pkl'))
-    # inception.cuda()
-
-    inception = creat_model(is_train=is_train, loader_defeault_model=loader_defeault_model)
-
-    # Loss and Optimizer
-    criterion = nn.CrossEntropyLoss()
-    optimizer = optim.Adam(inception.parameters(), lr=learning_rate, weight_decay=0.005)
-    losses = []
-    accuracy = []
-    # global learning_rate
-    # global optimizer
-    for epoch in range(num_epochs):
-        for i, (images, labels) in enumerate(train_loader):
-            images = Variable(images).cuda()
-            # labels1 = labels
-            labels = torch.squeeze(labels)
-            labels = Variable(labels).cuda()
-
-            # Forward + Backward + Optimize
-            optimizer.zero_grad()
-            outputs = inception(images)[0]
-            loss = criterion(outputs, labels)
-            loss.backward()
-            optimizer.step()
-            writer.add_scalar('data/losses', loss, epoch*(len(train_dataset)//batch_size) + i)
-
-            if (i + 1) % 50 == 0:
-                print('Epoch [%d/%d], Iter [%d/%d] Loss: %.4f'
-                      % (epoch + 1, num_epochs, i + 1, len(train_dataset) // batch_size, loss.data[0]))
-                _, predicted = torch.max(outputs.data, 1)
-                correct = torch.sum(predicted == labels.data)
-                acc = correct / images.size(0)
-                accuracy.append(acc)
-                losses.append(loss.data[0])
-                writer.add_scalar('data/accuracy', acc, epoch*((len(train_dataset)//batch_size)//50) + i // 50)
-                print('Accuracy is: {:>7.3%}'.format(acc))
-
-        # Decaying Learning Rate
-        if (epoch + 1) % 5 == 0:
-            learning_rate /= 2
-            optimizer = optim.Adam(inception.parameters(), lr=learning_rate, weight_decay=0.01)
-            torch.save(inception.state_dict(), save_dir)
-
-    writer.close()
-    # def plot():
-    #     sns.set_style("darkgrid")
-    #
-    #     plt.figure()
-    #     plt.plot(losses, label='loss curves')
-    #     plt.xlabel('iteration')
-    #     plt.ylabel('loss')
-    #     plt.legend()
-    #     plt.savefig('resnet34_transfer.png', dpi=350)
-    #
-    #     plt.figure()
-    #     plt.plot(accuracy, 'r', label='accuracy curves')
-    #     plt.xlabel('iteration')
-    #     plt.ylabel('accuracy')
-    #     plt.legend()
-    #     plt.savefig('resnet34_transfer.png', dpi=350)
-    #     # plt.show()
-
-    # plot()
-
-    # Save the Trained Model
-    torch.save(inception.state_dict(), save_dir)
 
 
 
