@@ -13,3 +13,6 @@
 ---
 ### <span id="1">1.读取数据</span>
 新建一个读取数据的dataset文件，在该文件中写入一个MyImagesDataset类进行数据读取和处理。
+
+
+### <span id="2">2.选择模型</span>
