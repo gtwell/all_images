@@ -1,3 +1,5 @@
+# Author: gtwell
+
 import torch
 from tensorboardX import SummaryWriter
 import argparse
